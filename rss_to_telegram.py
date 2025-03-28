@@ -15,7 +15,7 @@ load_dotenv()
 API_ID = int(os.getenv('TELEGRAM_API_ID'))
 API_HASH = os.getenv('TELEGRAM_API_HASH')
 SESSION_STRING = os.getenv('TELEGRAM_SESSION_STRING')
-CHANNEL_ID = int(os.getenv('TELEGRAM_CHANNEL_ID'))
+CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
 
 # RSS Feed URL
 RSS_FEED_URL = 'https://rss.app/feeds/GlIhLfO4znFdKbiW.xml'
