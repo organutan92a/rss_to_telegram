@@ -1,3 +1,4 @@
 feedparser
 telethon
-python-dotenv
+Flask
+requests
