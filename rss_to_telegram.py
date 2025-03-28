@@ -3,18 +3,26 @@ import feedparser
 import asyncio
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+from flask import Flask
+from threading import Thread
+import requests
+from io import BytesIO
 
-# Load environment variables
+# Environment variables
 RSS_FEED_URL = os.getenv('RSS_FEED_URL')
 API_ID = int(os.getenv('TELEGRAM_API_ID'))
 API_HASH = os.getenv('TELEGRAM_API_HASH')
 SESSION_STRING = os.getenv('TELEGRAM_SESSION_STRING')
 CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
 
-# File to keep track of the last posted entry
 LAST_POST_FILE = 'last_post.txt'
+app = Flask(__name__)
 
-async def main():
+@app.route('/')
+def home():
+    return "✅ RSS Telegram Bot is Running!"
+
+async def rss_worker():
     client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
     await client.start()
 
@@ -23,51 +31,56 @@ async def main():
 
         if feed.entries:
             latest_entry = feed.entries[0]
-
-            # Get ID or unique link of the latest entry
             latest_entry_id = latest_entry.get('id', latest_entry.link)
 
-            # Check if last_post.txt exists
             if not os.path.exists(LAST_POST_FILE):
-                # First run, send ONLY latest post and save it
-                await send_entry(client, latest_entry)
+                await send_cropped_image(client, latest_entry)
                 with open(LAST_POST_FILE, 'w') as file:
                     file.write(latest_entry_id)
-                print("✅ First run completed, latest post sent.")
+                print("✅ First run, sent latest post.")
             else:
-                # Subsequent runs, check if there's a new entry
                 with open(LAST_POST_FILE, 'r') as file:
                     last_posted_id = file.read().strip()
 
                 if latest_entry_id != last_posted_id:
-                    # New post found, send it
-                    await send_entry(client, latest_entry)
+                    await send_cropped_image(client, latest_entry)
                     with open(LAST_POST_FILE, 'w') as file:
                         file.write(latest_entry_id)
-                    print("✅ New post detected and sent.")
+                    print("✅ New post sent.")
                 else:
                     print("ℹ️ No new posts found.")
-
         else:
-            print("⚠️ RSS feed is empty or unavailable.")
+            print("⚠️ RSS feed empty/unavailable.")
 
-        # Wait 1 hour (3600 seconds) before checking again
-        await asyncio.sleep(3600)
+        await asyncio.sleep(3600)  # Check every hour
 
-async def send_entry(client, entry):
-    # Extract content without links
+async def send_cropped_image(client, entry):
     caption = entry.title.strip()
 
-    # Check for images in RSS feed
+    image_url = None
     if 'media_content' in entry:
         image_url = entry.media_content[0]['url']
-        await client.send_file(CHANNEL_ID, image_url, caption=caption)
     elif 'links' in entry and entry.links[0].type.startswith('image'):
         image_url = entry.links[0].href
-        await client.send_file(CHANNEL_ID, image_url, caption=caption)
+
+    if image_url:
+        response = requests.get(image_url)
+        img_bytes = BytesIO(response.content)
+        
+        await client.send_file(
+            CHANNEL_ID,
+            file=img_bytes,
+            caption=caption
+        )
     else:
-        # If no image, send just the caption
         await client.send_message(CHANNEL_ID, caption)
 
+def run_asyncio_loop():
+    asyncio.run(rss_worker())
+
 if __name__ == '__main__':
-    asyncio.run(main())
+    thread = Thread(target=run_asyncio_loop)
+    thread.start()
+
+    port = int(os.getenv('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
