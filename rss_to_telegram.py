@@ -1,103 +1,73 @@
 import os
-import time
 import feedparser
-import html
-import re
-import json
-from telethon.sync import TelegramClient
+import asyncio
+from telethon import TelegramClient
 from telethon.sessions import StringSession
-from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
-
-# Telegram API credentials and session string from environment variables
+# Load environment variables
+RSS_FEED_URL = os.getenv('RSS_FEED_URL')
 API_ID = int(os.getenv('TELEGRAM_API_ID'))
 API_HASH = os.getenv('TELEGRAM_API_HASH')
 SESSION_STRING = os.getenv('TELEGRAM_SESSION_STRING')
 CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
 
-# RSS Feed URL
-RSS_FEED_URL = 'https://rss.app/feeds/GlIhLfO4znFdKbiW.xml'
+# File to keep track of the last posted entry
+LAST_POST_FILE = 'last_post.txt'
 
-# File to store processed post IDs
-PROCESSED_POSTS_FILE = 'processed_posts.json'
-
-# Optional: Affiliate link or any specific link you want to include
-AFFILIATE_LINK = 'https://your-affiliate-link.com'
-
-def load_processed_posts():
-    """Load the set of processed post IDs from file."""
-    if os.path.exists(PROCESSED_POSTS_FILE):
-        with open(PROCESSED_POSTS_FILE, 'r') as file:
-            return set(json.load(file))
-    return set()
-
-def save_processed_post(post_id):
-    """Save a new processed post ID to file."""
-    processed_posts = load_processed_posts()
-    processed_posts.add(post_id)
-    with open(PROCESSED_POSTS_FILE, 'w') as file:
-        json.dump(list(processed_posts), file)
-
-def extract_image_url(entry):
-    """Extract image URL from the RSS entry."""
-    # Check for media:content
-    media_content = entry.get('media_content', [])
-    if media_content:
-        return media_content[0]['url']
-    
-    # Check for image in the description
-    if 'description' in entry:
-        description = html.unescape(entry.description)
-        img_match = re.search(r'<img.*?src="(.*?)".*?>', description)
-        if img_match:
-            return img_match.group(1)
-    
-    return None
-
-def main():
-    """Main function to monitor RSS feed and send new posts to Telegram."""
-    # Initialize Telegram client with session string
+async def main():
     client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-    client.start()
-    
-    processed_posts = load_processed_posts()
-    
+    await client.start()
+
     while True:
         feed = feedparser.parse(RSS_FEED_URL)
-        new_entries = []
 
-        for entry in feed.entries:
-            post_id = entry.id if 'id' in entry else entry.link
-            if post_id not in processed_posts:
-                new_entries.append(entry)
+        if feed.entries:
+            latest_entry = feed.entries[0]
+
+            # Get ID or unique link of the latest entry
+            latest_entry_id = latest_entry.get('id', latest_entry.link)
+
+            # Check if last_post.txt exists
+            if not os.path.exists(LAST_POST_FILE):
+                # First run, send ONLY latest post and save it
+                await send_entry(client, latest_entry)
+                with open(LAST_POST_FILE, 'w') as file:
+                    file.write(latest_entry_id)
+                print("✅ First run completed, latest post sent.")
             else:
-                break  # Assumes entries are in reverse chronological order
+                # Subsequent runs, check if there's a new entry
+                with open(LAST_POST_FILE, 'r') as file:
+                    last_posted_id = file.read().strip()
 
-        # Process new entries in reverse order to maintain chronological sequence
-        for entry in reversed(new_entries):
-            post_id = entry.id if 'id' in entry else entry.link
-            title = entry.title
-            image_url = extract_image_url(entry)
-            
-            # Construct the message without any links
-            caption = f"{title}"
-            
-            # Optional: Append the affiliate link if specified
-            if AFFILIATE_LINK:
-                caption += f"\n\nMore details: {AFFILIATE_LINK}"
+                if latest_entry_id != last_posted_id:
+                    # New post found, send it
+                    await send_entry(client, latest_entry)
+                    with open(LAST_POST_FILE, 'w') as file:
+                        file.write(latest_entry_id)
+                    print("✅ New post detected and sent.")
+                else:
+                    print("ℹ️ No new posts found.")
 
-            if image_url:
-                client.send_file(CHANNEL_ID, image_url, caption=caption)
-            else:
-                client.send_message(CHANNEL_ID, caption)
+        else:
+            print("⚠️ RSS feed is empty or unavailable.")
 
-            save_processed_post(post_id)
-            print(f"Processed post: {title}")
+        # Wait 1 hour (3600 seconds) before checking again
+        await asyncio.sleep(3600)
 
-        print("Waiting for 30 minutes before checking for new posts...")
-        time.sleep(1800)  # Wait for 30 minutes
+async def send_entry(client, entry):
+    # Extract content without links
+    caption = entry.title.strip()
 
-if __name__ == "__main__":
-    main()
+    # Check for images in RSS feed
+    if 'media_content' in entry:
+        image_url = entry.media_content[0]['url']
+        await client.send_file(CHANNEL_ID, image_url, caption=caption)
+    elif 'links' in entry and entry.links[0].type.startswith('image'):
+        image_url = entry.links[0].href
+        await client.send_file(CHANNEL_ID, image_url, caption=caption)
+    else:
+        # If no image, send just the caption
+        await client.send_message(CHANNEL_ID, caption)
+
+if __name__ == '__main__':
+    asyncio.run(main())
