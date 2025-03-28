@@ -33,26 +33,24 @@ async def rss_worker():
             latest_entry = feed.entries[0]
             latest_entry_id = latest_entry.get('id', latest_entry.link)
 
-            if not os.path.exists(LAST_POST_FILE):
-                await send_cropped_image(client, latest_entry)
-                with open(LAST_POST_FILE, 'w') as file:
-                    file.write(latest_entry_id)
-                print("✅ First run, sent latest post.")
-            else:
+            last_posted_id = None
+            if os.path.exists(LAST_POST_FILE):
                 with open(LAST_POST_FILE, 'r') as file:
                     last_posted_id = file.read().strip()
 
-                if latest_entry_id != last_posted_id:
-                    await send_cropped_image(client, latest_entry)
-                    with open(LAST_POST_FILE, 'w') as file:
-                        file.write(latest_entry_id)
-                    print("✅ New post sent.")
-                else:
-                    print("ℹ️ No new posts found.")
+            # Only post if new entry detected
+            if latest_entry_id != last_posted_id:
+                await send_cropped_image(client, latest_entry)
+                with open(LAST_POST_FILE, 'w') as file:
+                    file.write(latest_entry_id)
+                print("✅ New post sent.")
+            else:
+                print("ℹ️ No new posts found.")
         else:
             print("⚠️ RSS feed empty/unavailable.")
 
-        await asyncio.sleep(3600)  # Check every hour
+        await asyncio.sleep(3600)
+
 
 async def send_cropped_image(client, entry):
     caption = entry.title.strip()
@@ -66,14 +64,17 @@ async def send_cropped_image(client, entry):
     if image_url:
         response = requests.get(image_url)
         img_bytes = BytesIO(response.content)
-        
+        img_bytes.name = 'image.jpg'  # explicitly name the file to ensure Telegram recognizes it as an image
+
         await client.send_file(
             CHANNEL_ID,
             file=img_bytes,
-            caption=caption
+            caption=caption,
+            force_document=False  # Ensures Telegram sends it as an inline image
         )
     else:
         await client.send_message(CHANNEL_ID, caption)
+
 
 def run_asyncio_loop():
     asyncio.run(rss_worker())
